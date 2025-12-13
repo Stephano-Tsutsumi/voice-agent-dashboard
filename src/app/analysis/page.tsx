@@ -29,7 +29,7 @@ export default function AnalysisPage() {
   const [selectedCall, setSelectedCall] = useState<Call | null>(null);
   const [isLoadingCalls, setIsLoadingCalls] = useState(false);
   const [selectedFailureMode, setSelectedFailureMode] = useState<string | null>(null);
-  const [testCases, setTestCases] = useState<TestCase[]>([]);
+  const [allTestCases, setAllTestCases] = useState<TestCase[]>([]);
   const [tickets, setTickets] = useState<Ticket[]>([]);
   const [isGeneratingTestCase, setIsGeneratingTestCase] = useState(false);
   const [isCreatingTicket, setIsCreatingTicket] = useState(false);
@@ -40,10 +40,30 @@ export default function AnalysisPage() {
   const [chatMessages, setChatMessages] = useState<Array<{ role: "user" | "assistant"; content: string }>>([]);
   const [chatInput, setChatInput] = useState("");
   const [isChatLoading, setIsChatLoading] = useState(false);
+  const [showTestCaseManagement, setShowTestCaseManagement] = useState(false);
 
   useEffect(() => {
     fetchAnalysis();
+    fetchAllTestCases();
   }, []);
+
+  const fetchAllTestCases = async () => {
+    try {
+      const response = await fetch("/api/test-cases?all=true");
+      if (response.ok) {
+        const data = await response.json();
+        // Ensure dates are Date objects
+        const testCasesWithDates = data.map((tc: any) => ({
+          ...tc,
+          createdAt: tc.createdAt ? new Date(tc.createdAt) : new Date(),
+          updatedAt: tc.updatedAt ? new Date(tc.updatedAt) : new Date(),
+        }));
+        setAllTestCases(testCasesWithDates);
+      }
+    } catch (error) {
+      console.error("Failed to fetch test cases:", error);
+    }
+  };
 
   const fetchAnalysis = async () => {
     try {
@@ -128,25 +148,6 @@ export default function AnalysisPage() {
 
   const handleFailureModeClick = async (failureMode: string) => {
     setSelectedFailureMode(failureMode);
-    // Fetch test cases and tickets for this failure mode
-    try {
-      const [testCasesRes, ticketsRes] = await Promise.all([
-        fetch(`/api/test-cases?failureMode=${encodeURIComponent(failureMode)}`),
-        fetch(`/api/tickets?failureMode=${encodeURIComponent(failureMode)}`),
-      ]);
-      
-      if (testCasesRes.ok) {
-        const testCasesData = await testCasesRes.json();
-        setTestCases(testCasesData);
-      }
-      
-      if (ticketsRes.ok) {
-        const ticketsData = await ticketsRes.json();
-        setTickets(ticketsData);
-      }
-    } catch (error) {
-      console.error("Failed to fetch test cases/tickets:", error);
-    }
   };
 
   const handleGenerateTestCase = async (failureMode: string) => {
@@ -156,7 +157,8 @@ export default function AnalysisPage() {
       const callsResponse = await fetch(`/api/calls?failureMode=${encodeURIComponent(failureMode)}`);
       let exampleCalls: Call[] = [];
       if (callsResponse.ok) {
-        exampleCalls = (await callsResponse.json()).slice(0, 3);
+        const calls = await callsResponse.json();
+        exampleCalls = Array.isArray(calls) ? calls.slice(0, 3) : [];
       }
       
       const observations = exampleCalls
@@ -183,30 +185,54 @@ export default function AnalysisPage() {
 
       const data = await response.json();
       
+      // Validate response has required fields
+      if (!data.testCase && !data.test_case) {
+        throw new Error("Invalid test case response: missing testCase field");
+      }
+      
       // Save test case
       const testCase: TestCase = {
         id: `tc_${Date.now()}_${Math.random().toString(36).substring(7)}`,
-        failureMode,
-        testCase: data.testCase,
-        steps: data.steps,
-        expectedResult: data.expectedResult,
-        actualResult: data.actualResult,
+        failureMode: failureMode.replace(/\s+/g, "_").toLowerCase(),
+        testCase: data.testCase || data.test_case || "Test case",
+        steps: typeof data.steps === 'string' ? data.steps : JSON.stringify(data.steps),
+        expectedResult: data.expectedResult || data.expected_result || undefined,
+        actualResult: data.actualResult || data.actual_result || undefined,
         status: "draft",
         createdAt: new Date(),
         updatedAt: new Date(),
       };
 
-      await fetch("/api/test-cases", {
+      const saveResponse = await fetch("/api/test-cases", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(testCase),
       });
 
-      // Refresh test cases
-      await handleFailureModeClick(failureMode);
+      if (!saveResponse.ok) {
+        const errorData = await saveResponse.json().catch(() => ({}));
+        throw new Error(errorData.error || "Failed to save test case");
+      }
+
+      // Refresh all test cases and add to chat
+      await fetchAllTestCases();
+      setChatMessages((prev) => [
+        ...prev,
+        { 
+          role: "assistant", 
+          content: `✅ Test case generated and saved!\n\n**Test Case:** ${data.testCase}\n\n**Steps:**\n${data.steps}\n\nYou can view and manage all test cases using the "Manage Test Cases" button.` 
+        },
+      ]);
     } catch (error) {
       console.error("Failed to generate test case:", error);
-      alert("Failed to generate test case. Please try again.");
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      setChatMessages((prev) => [
+        ...prev,
+        { 
+          role: "assistant", 
+          content: `❌ Failed to generate test case: ${errorMessage}\n\nPlease check:\n1. OpenAI API key is set\n2. The failure mode is valid\n3. Try asking in a different way, e.g., "Generate a test case for tone mismatch"` 
+        },
+      ]);
     } finally {
       setIsGeneratingTestCase(false);
     }
@@ -237,36 +263,101 @@ export default function AnalysisPage() {
       }
 
       const data = await response.json();
-      setChatMessages((prev) => [...prev, { role: "assistant", content: data.response }]);
+      const assistantResponse = data.response;
+      setChatMessages((prev) => [...prev, { role: "assistant", content: assistantResponse }]);
 
-      // Check if user wants to generate test cases
-      const wantsTestCase = userMessage.toLowerCase().includes("test case") || 
-                           userMessage.toLowerCase().includes("generate test") ||
-                           userMessage.toLowerCase().includes("create test");
+      // Try to extract test case from JSON in the response
+      const jsonMatch = assistantResponse.match(/\{[\s\S]*"test_case[\s\S]*\}/) || 
+                       assistantResponse.match(/\{[\s\S]*"testCase[\s\S]*\}/) ||
+                       assistantResponse.match(/\{[\s\S]*"steps[\s\S]*\}/);
       
-      if (wantsTestCase) {
-        // Try to extract failure mode from response or user message
-        const failureModeMatch = data.response.match(/failure mode[:\s]+([^\n,\.]+)/i) ||
-                                userMessage.match(/(?:for|about|on)\s+([^\?\.]+?)(?:\s+test|$)/i);
-        const failureMode = failureModeMatch ? failureModeMatch[1].trim() : selectedFailureMode;
+      if (jsonMatch) {
+        try {
+          const parsed = JSON.parse(jsonMatch[0]);
+          // Check if it's a test case structure
+          if (parsed.testCase || parsed.test_case || parsed.steps) {
+            // Extract failure mode from user message or response
+            const failureModeMatch = userMessage.match(/(?:for|about|on|tone mismatch|tone_mismatch|error|failure)[:\s]+([^\?\.\n]+)/i) ||
+                                    assistantResponse.match(/failure mode[:\s]+([^\n,\.]+)/i) ||
+                                    assistantResponse.match(/tone[_\s]?mismatch/i);
+            
+            const failureMode = failureModeMatch 
+              ? failureModeMatch[1]?.trim().replace(/['"]/g, "") || "tone_mismatch"
+              : errorDistribution.length > 0 
+              ? errorDistribution[0].type 
+              : "general_failure";
+            
+            // Save the test case
+            const testCaseData = parsed.testCase || parsed.test_case || parsed.description || "Test case from chat";
+            const stepsData = parsed.steps || 
+                            (Array.isArray(parsed.steps) ? parsed.steps.map((s: any) => 
+                              typeof s === 'string' ? s : s.step_description || s.description || JSON.stringify(s)
+                            ).join("\n") : JSON.stringify(parsed.steps));
+            
+            const testCase: TestCase = {
+              id: `tc_${Date.now()}_${Math.random().toString(36).substring(7)}`,
+              failureMode: failureMode.replace(/\s+/g, "_").toLowerCase(),
+              testCase: typeof testCaseData === 'string' ? testCaseData : JSON.stringify(testCaseData),
+              steps: typeof stepsData === 'string' ? stepsData : JSON.stringify(stepsData),
+              expectedResult: parsed.expectedResult || parsed.expected_result || parsed.expected || undefined,
+              actualResult: parsed.actualResult || parsed.actual_result || parsed.actual || undefined,
+              status: "draft",
+              createdAt: new Date(),
+              updatedAt: new Date(),
+            };
+
+            const saveResponse = await fetch("/api/test-cases", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(testCase),
+            });
+
+            if (saveResponse.ok) {
+              await fetchAllTestCases();
+              setChatMessages((prev) => [
+                ...prev.slice(0, -1), // Remove last message
+                { 
+                  role: "assistant", 
+                  content: `${assistantResponse}\n\n✅ **Test case automatically saved to management!**` 
+                },
+              ]);
+            }
+          }
+        } catch (parseError) {
+          // If JSON parsing fails, check if user explicitly asked for test case generation
+          const wantsTestCase = userMessage.toLowerCase().includes("test case") || 
+                               userMessage.toLowerCase().includes("generate test") ||
+                               userMessage.toLowerCase().includes("create test");
+          
+          if (wantsTestCase) {
+            // Try to extract failure mode and generate
+            const failureModeMatch = userMessage.match(/(?:for|about|on)[:\s]+([^\?\.\n]+)/i) ||
+                                    assistantResponse.match(/failure mode[:\s]+([^\n,\.]+)/i);
+            const failureMode = failureModeMatch ? failureModeMatch[1].trim().replace(/\s+/g, "_").toLowerCase() : 
+                               errorDistribution.length > 0 ? errorDistribution[0].type : 
+                               "general_failure";
+            
+            await handleGenerateTestCase(failureMode);
+          }
+        }
+      } else {
+        // Check if user wants to generate test cases
+        const wantsTestCase = userMessage.toLowerCase().includes("test case") || 
+                             userMessage.toLowerCase().includes("generate test") ||
+                             userMessage.toLowerCase().includes("create test");
         
-        if (failureMode) {
-          // Set the failure mode and generate test case
-          setSelectedFailureMode(failureMode);
-          await handleFailureModeClick(failureMode);
-          await handleGenerateTestCase(failureMode);
-        } else if (selectedFailureMode) {
-          // Use currently selected failure mode
-          await handleGenerateTestCase(selectedFailureMode);
-        } else {
-          // Ask user to specify failure mode
-          setChatMessages((prev) => [
-            ...prev,
-            { 
-              role: "assistant", 
-              content: "Please specify which failure mode you'd like to generate a test case for, or select one from the error distribution." 
-            },
-          ]);
+        if (wantsTestCase) {
+          // Try to extract failure mode from response or user message
+          const failureModeMatch = userMessage.match(/(?:for|about|on)[:\s]+([^\?\.\n]+)/i) ||
+                                  assistantResponse.match(/failure mode[:\s]+([^\n,\.]+)/i);
+          const failureMode = failureModeMatch ? failureModeMatch[1].trim().replace(/\s+/g, "_").toLowerCase() : 
+                             errorDistribution.length > 0 ? errorDistribution[0].type : 
+                             "general_failure";
+          
+          if (failureMode) {
+            // Generate test case directly
+            await handleGenerateTestCase(failureMode);
+          }
         }
       }
     } catch (error) {
@@ -280,8 +371,9 @@ export default function AnalysisPage() {
     }
   };
 
-  const handleExportTestCases = (format: "csv" | "txt") => {
-    if (testCases.length === 0) {
+  const handleExportTestCases = (format: "csv" | "txt", testCasesToExport?: TestCase[]) => {
+    const casesToExport = testCasesToExport || allTestCases;
+    if (casesToExport.length === 0) {
       alert("No test cases to export");
       return;
     }
@@ -292,7 +384,7 @@ export default function AnalysisPage() {
     if (format === "csv") {
       // CSV format
       const headers = ["ID", "Failure Mode", "Test Case", "Steps", "Expected Result", "Actual Result", "Status"];
-      const rows = testCases.map((tc) => [
+      const rows = casesToExport.map((tc) => [
         tc.id,
         tc.failureMode,
         tc.testCase,
@@ -303,10 +395,10 @@ export default function AnalysisPage() {
       ]);
       
       content = [headers, ...rows].map((row) => row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(",")).join("\n");
-      filename = `test-cases-${selectedFailureMode || "all"}-${Date.now()}.csv`;
+      filename = `test-cases-${Date.now()}.csv`;
     } else {
       // Text format
-      content = testCases.map((tc, idx) => {
+      content = casesToExport.map((tc, idx) => {
         return `Test Case ${idx + 1}
 ${"=".repeat(50)}
 ID: ${tc.id}
@@ -330,7 +422,7 @@ ${"=".repeat(50)}
 
 `;
       }).join("\n");
-      filename = `test-cases-${selectedFailureMode || "all"}-${Date.now()}.txt`;
+      filename = `test-cases-${Date.now()}.txt`;
     }
 
     // Download file
@@ -394,9 +486,18 @@ ${"=".repeat(50)}
       });
 
       // Refresh tickets and clear form
-      await handleFailureModeClick(testCase.failureMode);
+      await fetchAllTestCases();
       setProblemDescription("");
       setSelectedTestCase(null);
+      
+      // Add success message to chat
+      setChatMessages((prev) => [
+        ...prev,
+        { 
+          role: "assistant", 
+          content: `✅ Ticket created successfully!\n\n**Title:** ${ticket.title}\n**Priority:** ${ticket.priority}\n**Status:** ${ticket.status}\n\nYou can view all tickets in the test case management section.` 
+        },
+      ]);
     } catch (error) {
       console.error("Failed to create ticket:", error);
       alert("Failed to create ticket. Please try again.");
@@ -414,8 +515,15 @@ ${"=".repeat(50)}
             <p className="text-gray-600 dark:text-gray-400">Analyze failure modes and error patterns</p>
           </div>
           <div className="flex items-center gap-3">
+            <Button
+              onClick={() => setShowTestCaseManagement(!showTestCaseManagement)}
+              variant="outline"
+              className="border-gray-300 dark:border-gray-800 bg-gray-50 dark:bg-gray-900/50 text-gray-700 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800"
+            >
+              {showTestCaseManagement ? "Hide" : "Manage Test Cases"} ({allTestCases.length})
+            </Button>
             <Link href="/dashboard">
-              <Button variant="outline" className="border-gray-800 bg-gray-900/50 text-gray-400 hover:bg-gray-800 hover:text-gray-300 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300">
+              <Button variant="outline" className="border-gray-300 dark:border-gray-800 bg-gray-50 dark:bg-gray-900/50 text-gray-700 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800">
                 Back to Dashboard
               </Button>
             </Link>
@@ -613,53 +721,26 @@ ${"=".repeat(50)}
           </div>
         )}
 
-        {/* Failure Mode Details View */}
-        {selectedFailureMode && (
+        {/* Test Case Management View */}
+        {showTestCaseManagement && (
           <div className="mt-8 border border-gray-200 dark:border-gray-800 rounded-lg p-6 bg-white dark:bg-[#0a0a0a]">
             <div className="flex items-center justify-between mb-4">
               <div>
-                <h2 className="text-xl font-semibold text-gray-900 dark:text-white">
-                  Failure Mode: {selectedFailureMode}
-                </h2>
+                <h2 className="text-xl font-semibold text-gray-900 dark:text-white">Test Case Management</h2>
                 <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
-                  Generate test cases and create tickets for this failure mode
+                  View, manage, and export all saved test cases
                 </p>
               </div>
               <div className="flex gap-2">
-                <Button
-                  onClick={() => handleGenerateTestCase(selectedFailureMode)}
-                  disabled={isGeneratingTestCase}
-                  className="bg-blue-600 hover:bg-blue-700 text-white"
-                >
-                  {isGeneratingTestCase ? "Generating..." : "🤖 Generate Test Case"}
-                </Button>
-                <Button
-                  variant="outline"
-                  onClick={() => {
-                    setSelectedFailureMode(null);
-                    setTestCases([]);
-                    setTickets([]);
-                  }}
-                  className="border-gray-300 dark:border-gray-800 bg-gray-50 dark:bg-gray-900/50 text-gray-700 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800"
-                >
-                  Close
-                </Button>
-              </div>
-            </div>
-
-            {/* Test Cases */}
-            <div className="mb-6">
-              <div className="flex items-center justify-between mb-3">
-                <h3 className="text-lg font-semibold text-gray-900 dark:text-white">Test Cases</h3>
-                {testCases.length > 0 && (
-                  <div className="flex gap-2">
+                {allTestCases.length > 0 && (
+                  <>
                     <Button
                       onClick={() => handleExportTestCases("csv")}
                       variant="outline"
                       size="sm"
                       className="border-gray-300 dark:border-gray-800 bg-gray-50 dark:bg-gray-900/50 text-gray-700 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800"
                     >
-                      📥 Export CSV
+                      📥 Export All CSV
                     </Button>
                     <Button
                       onClick={() => handleExportTestCases("txt")}
@@ -667,96 +748,109 @@ ${"=".repeat(50)}
                       size="sm"
                       className="border-gray-300 dark:border-gray-800 bg-gray-50 dark:bg-gray-900/50 text-gray-700 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800"
                     >
-                      📥 Export TXT
+                      📥 Export All TXT
                     </Button>
-                  </div>
+                  </>
                 )}
+                <Button
+                  variant="outline"
+                  onClick={() => setShowTestCaseManagement(false)}
+                  className="border-gray-300 dark:border-gray-800 bg-gray-50 dark:bg-gray-900/50 text-gray-700 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800"
+                >
+                  Close
+                </Button>
               </div>
-              {testCases.length === 0 ? (
-                <p className="text-gray-600 dark:text-gray-400 text-sm">No test cases yet. Use the chat to generate test cases or click "Generate Test Case" above.</p>
-              ) : (
-                <div className="space-y-4">
-                  {testCases.map((testCase) => (
-                    <div key={testCase.id} className="border border-gray-200 dark:border-gray-800 rounded-lg p-4 bg-gray-50 dark:bg-gray-900">
-                      <div className="flex items-start justify-between mb-2">
-                        <div className="flex-1">
-                          <h4 className="font-semibold text-gray-900 dark:text-white mb-2">{testCase.testCase}</h4>
-                          <div className="space-y-2 text-sm">
-                            <div>
-                              <span className="font-medium text-gray-700 dark:text-gray-300">Steps:</span>
-                              <pre className="mt-1 text-gray-600 dark:text-gray-400 whitespace-pre-wrap font-sans">{testCase.steps}</pre>
-                            </div>
-                            {testCase.expectedResult && (
-                              <div>
-                                <span className="font-medium text-gray-700 dark:text-gray-300">Expected:</span>
-                                <p className="mt-1 text-gray-600 dark:text-gray-400">{testCase.expectedResult}</p>
-                              </div>
-                            )}
-                            {testCase.actualResult && (
-                              <div>
-                                <span className="font-medium text-gray-700 dark:text-gray-300">Actual:</span>
-                                <p className="mt-1 text-gray-600 dark:text-gray-400">{testCase.actualResult}</p>
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                        <Badge variant="outline" className="ml-4">
-                          {testCase.status}
-                        </Badge>
-                      </div>
-                      
-                      {/* Create Ticket Section */}
-                      <div className="mt-4 pt-4 border-t border-gray-200 dark:border-gray-800">
-                        <h5 className="font-medium text-gray-900 dark:text-white mb-2">Create Ticket</h5>
-                        <textarea
-                          value={selectedTestCase?.id === testCase.id ? problemDescription : ""}
-                          onChange={(e) => {
-                            setProblemDescription(e.target.value);
-                            setSelectedTestCase(testCase);
-                          }}
-                          placeholder="Describe the problem/bug you found when testing..."
-                          rows={3}
-                          className="w-full px-3 py-2 border border-gray-300 dark:border-gray-700 rounded-md bg-white dark:bg-gray-800 text-gray-900 dark:text-white mb-2"
-                        />
-                        <Button
-                          onClick={() => handleCreateTicket(testCase)}
-                          disabled={isCreatingTicket || !problemDescription.trim() || selectedTestCase?.id !== testCase.id}
-                          size="sm"
-                          className="bg-green-600 hover:bg-green-700 text-white"
-                        >
-                          {isCreatingTicket ? "Creating..." : "🤖 Create Ticket"}
-                        </Button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
             </div>
 
-            {/* Tickets */}
-            {tickets.length > 0 && (
-              <div>
-                <h3 className="text-lg font-semibold mb-3 text-gray-900 dark:text-white">Tickets</h3>
-                <div className="space-y-3">
-                  {tickets.map((ticket) => (
-                    <div key={ticket.id} className="border border-gray-200 dark:border-gray-800 rounded-lg p-4 bg-gray-50 dark:bg-gray-900">
-                      <div className="flex items-start justify-between">
-                        <div className="flex-1">
-                          <h4 className="font-semibold text-gray-900 dark:text-white mb-1">{ticket.title}</h4>
-                          <p className="text-sm text-gray-600 dark:text-gray-400 mb-2 whitespace-pre-wrap">{ticket.description}</p>
-                          <div className="flex gap-2">
-                            <Badge variant="outline" className="bg-orange-50 dark:bg-orange-900/30 text-orange-700 dark:text-orange-300">
-                              {ticket.priority}
-                            </Badge>
-                            <Badge variant="outline">
-                              {ticket.status}
-                            </Badge>
+            {allTestCases.length === 0 ? (
+              <p className="text-gray-600 dark:text-gray-400 text-center py-8">
+                No test cases saved yet. Use the chat to generate test cases and they will be automatically saved here.
+              </p>
+            ) : (
+              <div className="space-y-6">
+                {Object.entries(
+                  allTestCases.reduce((acc, tc) => {
+                    const key = tc.failureMode || "uncategorized";
+                    if (!acc[key]) acc[key] = [];
+                    acc[key].push(tc);
+                    return acc;
+                  }, {} as Record<string, TestCase[]>)
+                ).map(([failureMode, testCases]) => (
+                  <div key={failureMode} className="border border-gray-200 dark:border-gray-800 rounded-lg p-4 bg-gray-50 dark:bg-gray-900">
+                    <h3 className="text-lg font-semibold mb-3 text-gray-900 dark:text-white capitalize">
+                      {failureMode.replace(/_/g, " ")} ({testCases.length} {testCases.length === 1 ? "test case" : "test cases"})
+                    </h3>
+                    <div className="space-y-4">
+                      {testCases.map((testCase) => (
+                        <div key={testCase.id} className="border border-gray-200 dark:border-gray-800 rounded-lg p-4 bg-white dark:bg-[#0a0a0a]">
+                          <div className="flex items-start justify-between mb-2">
+                            <div className="flex-1">
+                              <div className="flex items-center gap-2 mb-2">
+                                <h4 className="font-semibold text-gray-900 dark:text-white">{testCase.testCase}</h4>
+                                <Badge variant="outline" className="text-xs">
+                                  {testCase.status}
+                                </Badge>
+                              </div>
+                              <div className="space-y-2 text-sm">
+                                <div>
+                                  <span className="font-medium text-gray-700 dark:text-gray-300">Steps:</span>
+                                  <pre className="mt-1 text-gray-600 dark:text-gray-400 whitespace-pre-wrap font-sans">{testCase.steps}</pre>
+                                </div>
+                                {testCase.expectedResult && (
+                                  <div>
+                                    <span className="font-medium text-gray-700 dark:text-gray-300">Expected:</span>
+                                    <p className="mt-1 text-gray-600 dark:text-gray-400">{testCase.expectedResult}</p>
+                                  </div>
+                                )}
+                                {testCase.actualResult && (
+                                  <div>
+                                    <span className="font-medium text-gray-700 dark:text-gray-300">Actual:</span>
+                                    <p className="mt-1 text-gray-600 dark:text-gray-400">{testCase.actualResult}</p>
+                                  </div>
+                                )}
+                                <div className="text-xs text-gray-500 dark:text-gray-400 mt-2">
+                                  Created: {testCase.createdAt.toLocaleString()}
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                          
+                          {/* Actions */}
+                          <div className="mt-4 pt-4 border-t border-gray-200 dark:border-gray-800 flex gap-2">
+                            <Button
+                              onClick={() => handleExportTestCases("csv", [testCase])}
+                              variant="outline"
+                              size="sm"
+                              className="border-gray-300 dark:border-gray-800 bg-gray-50 dark:bg-gray-900/50 text-gray-700 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800"
+                            >
+                              📥 Export CSV
+                            </Button>
+                            <Button
+                              onClick={() => handleExportTestCases("txt", [testCase])}
+                              variant="outline"
+                              size="sm"
+                              className="border-gray-300 dark:border-gray-800 bg-gray-50 dark:bg-gray-900/50 text-gray-700 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800"
+                            >
+                              📥 Export TXT
+                            </Button>
+                            <Button
+                              onClick={() => {
+                                setSelectedTestCase(testCase);
+                                setShowTestCaseManagement(false);
+                                setChatInput(`Create a ticket for test case: ${testCase.testCase}`);
+                              }}
+                              variant="outline"
+                              size="sm"
+                              className="border-gray-300 dark:border-gray-800 bg-gray-50 dark:bg-gray-900/50 text-gray-700 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800"
+                            >
+                              🎫 Create Ticket
+                            </Button>
                           </div>
                         </div>
-                      </div>
+                      ))}
                     </div>
-                  ))}
-                </div>
+                  </div>
+                ))}
               </div>
             )}
           </div>

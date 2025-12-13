@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { saveTestCase, getTestCasesByFailureMode } from "@/lib/db";
+import { saveTestCase, getTestCasesByFailureMode, getDatabase } from "@/lib/db";
 import { type TestCase } from "@/lib/test-cases";
 
 export async function POST(request: NextRequest) {
@@ -25,9 +25,31 @@ export async function GET(request: NextRequest) {
   try {
     const searchParams = request.nextUrl.searchParams;
     const failureMode = searchParams.get("failureMode");
+    const getAll = searchParams.get("all");
+
+    if (getAll === "true") {
+      // Get all test cases
+      const database = getDatabase();
+      const stmt = database.prepare("SELECT * FROM test_cases ORDER BY createdAt DESC");
+      const rows = stmt.all() as any[];
+      
+      const testCases = rows.map((row) => ({
+        id: row.id,
+        failureMode: row.failureMode,
+        testCase: row.testCase,
+        steps: row.steps,
+        expectedResult: row.expectedResult || undefined,
+        actualResult: row.actualResult || undefined,
+        status: (row.status || "draft") as TestCase["status"],
+        createdAt: row.createdAt ? new Date(row.createdAt) : new Date(),
+        updatedAt: row.updatedAt ? new Date(row.updatedAt) : new Date(),
+      }));
+      
+      return NextResponse.json(testCases);
+    }
 
     if (!failureMode) {
-      return NextResponse.json({ error: "failureMode parameter required" }, { status: 400 });
+      return NextResponse.json({ error: "failureMode parameter required or use all=true" }, { status: 400 });
     }
 
     const testCases = getTestCasesByFailureMode(failureMode);
