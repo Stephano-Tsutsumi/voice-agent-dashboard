@@ -35,6 +35,11 @@ export default function AnalysisPage() {
   const [isCreatingTicket, setIsCreatingTicket] = useState(false);
   const [selectedTestCase, setSelectedTestCase] = useState<TestCase | null>(null);
   const [problemDescription, setProblemDescription] = useState("");
+  const [showCreateFailureMode, setShowCreateFailureMode] = useState(false);
+  const [newFailureMode, setNewFailureMode] = useState("");
+  const [chatMessages, setChatMessages] = useState<Array<{ role: "user" | "assistant"; content: string }>>([]);
+  const [chatInput, setChatInput] = useState("");
+  const [isChatLoading, setIsChatLoading] = useState(false);
 
   useEffect(() => {
     fetchAnalysis();
@@ -166,7 +171,7 @@ export default function AnalysisPage() {
           observations,
           exampleCalls: exampleCalls.map((call) => ({
             callId: call.callId,
-            transcript: call.transcript,
+            transcript: call.transcript || "",
             annotation: call.annotation,
           })),
         }),
@@ -205,6 +210,139 @@ export default function AnalysisPage() {
     } finally {
       setIsGeneratingTestCase(false);
     }
+  };
+
+  const handleChatSend = async () => {
+    if (!chatInput.trim() || isChatLoading) return;
+
+    const userMessage = chatInput.trim();
+    setChatInput("");
+    setChatMessages((prev) => [...prev, { role: "user", content: userMessage }]);
+    setIsChatLoading(true);
+
+    try {
+      const response = await fetch("/api/ai/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          message: userMessage,
+          errorDistribution,
+          failureModes,
+          context: selectedFailureMode ? `Currently viewing failure mode: ${selectedFailureMode}` : undefined,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error("Failed to get chat response");
+      }
+
+      const data = await response.json();
+      setChatMessages((prev) => [...prev, { role: "assistant", content: data.response }]);
+
+      // Check if user wants to generate test cases
+      const wantsTestCase = userMessage.toLowerCase().includes("test case") || 
+                           userMessage.toLowerCase().includes("generate test") ||
+                           userMessage.toLowerCase().includes("create test");
+      
+      if (wantsTestCase) {
+        // Try to extract failure mode from response or user message
+        const failureModeMatch = data.response.match(/failure mode[:\s]+([^\n,\.]+)/i) ||
+                                userMessage.match(/(?:for|about|on)\s+([^\?\.]+?)(?:\s+test|$)/i);
+        const failureMode = failureModeMatch ? failureModeMatch[1].trim() : selectedFailureMode;
+        
+        if (failureMode) {
+          // Set the failure mode and generate test case
+          setSelectedFailureMode(failureMode);
+          await handleFailureModeClick(failureMode);
+          await handleGenerateTestCase(failureMode);
+        } else if (selectedFailureMode) {
+          // Use currently selected failure mode
+          await handleGenerateTestCase(selectedFailureMode);
+        } else {
+          // Ask user to specify failure mode
+          setChatMessages((prev) => [
+            ...prev,
+            { 
+              role: "assistant", 
+              content: "Please specify which failure mode you'd like to generate a test case for, or select one from the error distribution." 
+            },
+          ]);
+        }
+      }
+    } catch (error) {
+      console.error("Chat error:", error);
+      setChatMessages((prev) => [
+        ...prev,
+        { role: "assistant", content: "Sorry, I encountered an error. Please try again." },
+      ]);
+    } finally {
+      setIsChatLoading(false);
+    }
+  };
+
+  const handleExportTestCases = (format: "csv" | "txt") => {
+    if (testCases.length === 0) {
+      alert("No test cases to export");
+      return;
+    }
+
+    let content = "";
+    let filename = "";
+
+    if (format === "csv") {
+      // CSV format
+      const headers = ["ID", "Failure Mode", "Test Case", "Steps", "Expected Result", "Actual Result", "Status"];
+      const rows = testCases.map((tc) => [
+        tc.id,
+        tc.failureMode,
+        tc.testCase,
+        tc.steps.replace(/\n/g, " | "),
+        tc.expectedResult || "",
+        tc.actualResult || "",
+        tc.status,
+      ]);
+      
+      content = [headers, ...rows].map((row) => row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(",")).join("\n");
+      filename = `test-cases-${selectedFailureMode || "all"}-${Date.now()}.csv`;
+    } else {
+      // Text format
+      content = testCases.map((tc, idx) => {
+        return `Test Case ${idx + 1}
+${"=".repeat(50)}
+ID: ${tc.id}
+Failure Mode: ${tc.failureMode}
+Status: ${tc.status}
+Created: ${tc.createdAt.toLocaleString()}
+
+Description:
+${tc.testCase}
+
+Steps to Reproduce:
+${tc.steps}
+
+Expected Result:
+${tc.expectedResult || "N/A"}
+
+Actual Result:
+${tc.actualResult || "N/A"}
+
+${"=".repeat(50)}
+
+`;
+      }).join("\n");
+      filename = `test-cases-${selectedFailureMode || "all"}-${Date.now()}.txt`;
+    }
+
+    // Download file
+    const blob = new Blob([content], { type: format === "csv" ? "text/csv" : "text/plain" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
   };
 
   const handleCreateTicket = async (testCase: TestCase) => {
@@ -272,8 +410,8 @@ export default function AnalysisPage() {
       <div className="max-w-7xl mx-auto">
         <div className="flex items-center justify-between mb-8">
           <div>
-            <h1 className="text-3xl font-bold mb-2 text-white dark:text-white">Error Analysis</h1>
-            <p className="text-gray-400 dark:text-gray-400">Analyze failure modes and error patterns</p>
+            <h1 className="text-3xl font-bold mb-2 text-gray-900 dark:text-white">Error Analysis</h1>
+            <p className="text-gray-600 dark:text-gray-400">Analyze failure modes and error patterns</p>
           </div>
           <div className="flex items-center gap-3">
             <Link href="/dashboard">
@@ -286,37 +424,83 @@ export default function AnalysisPage() {
         </div>
 
         {isLoading ? (
-          <div className="text-center py-8 text-gray-400">Loading analysis...</div>
+          <div className="text-center py-8 text-gray-600 dark:text-gray-400">Loading analysis...</div>
         ) : (
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            {/* Failure Modes */}
-            <div className="border border-gray-200 dark:border-gray-800 rounded-lg p-6 bg-white dark:bg-[#0a0a0a]">
-              <h2 className="text-xl font-semibold mb-4 text-gray-900 dark:text-white">Failure Modes</h2>
-              {failureModes.length === 0 ? (
-                <p className="text-gray-500 dark:text-gray-400">No failure modes identified yet. Annotate calls to see patterns.</p>
-              ) : (
-                <div className="space-y-3">
-                  {failureModes.map((mode, idx) => (
+            {/* Chat UI for Failure Mode Analysis */}
+            <div className="border border-gray-200 dark:border-gray-800 rounded-lg p-6 bg-white dark:bg-[#0a0a0a] flex flex-col h-[600px]">
+              <h2 className="text-xl font-semibold mb-4 text-gray-900 dark:text-white">Failure Mode Analysis</h2>
+              
+              {/* Chat Messages */}
+              <div className="flex-1 overflow-y-auto mb-4 space-y-4">
+                {chatMessages.length === 0 ? (
+                  <div className="text-gray-600 dark:text-gray-400 text-sm space-y-2">
+                    <p>Ask me about failure modes based on your error distribution!</p>
+                    <p className="font-semibold text-gray-900 dark:text-white">Try asking:</p>
+                    <ul className="list-disc list-inside space-y-1 ml-4">
+                      <li>"What are the common failure modes based on my error distribution?"</li>
+                      <li>"Generate test cases for tone mismatch failures"</li>
+                      <li>"What patterns do you see in my errors?"</li>
+                    </ul>
+                  </div>
+                ) : (
+                  chatMessages.map((msg, idx) => (
                     <div
                       key={idx}
-                      onClick={() => handleFailureModeClick(mode.mode)}
-                      className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-900 rounded-lg cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
+                      className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
                     >
-                      <span className="text-gray-900 dark:text-white">{mode.mode}</span>
-                      <Badge variant="outline" className="bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300">
-                        {mode.count} {mode.count === 1 ? "case" : "cases"}
-                      </Badge>
+                      <div
+                        className={`max-w-[80%] rounded-lg p-3 ${
+                          msg.role === "user"
+                            ? "bg-blue-600 text-white"
+                            : "bg-gray-100 dark:bg-gray-800 text-gray-900 dark:text-white"
+                        }`}
+                      >
+                        <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
+                      </div>
                     </div>
-                  ))}
-                </div>
-              )}
+                  ))
+                )}
+                {isChatLoading && (
+                  <div className="flex justify-start">
+                    <div className="bg-gray-100 dark:bg-gray-800 rounded-lg p-3">
+                      <p className="text-sm text-gray-700 dark:text-gray-400">Thinking...</p>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Chat Input */}
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={chatInput}
+                  onChange={(e) => setChatInput(e.target.value)}
+                  onKeyPress={(e) => {
+                    if (e.key === "Enter" && !e.shiftKey) {
+                      e.preventDefault();
+                      handleChatSend();
+                    }
+                  }}
+                  placeholder="Ask about failure modes or generate test cases..."
+                  className="flex-1 px-3 py-2 border border-gray-300 dark:border-gray-700 rounded-md bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
+                  disabled={isChatLoading}
+                />
+                <Button
+                  onClick={handleChatSend}
+                  disabled={isChatLoading || !chatInput.trim()}
+                  className="bg-blue-600 hover:bg-blue-700 text-white"
+                >
+                  Send
+                </Button>
+              </div>
             </div>
 
             {/* Error Type Distribution */}
             <div className="border border-gray-200 dark:border-gray-800 rounded-lg p-6 bg-white dark:bg-[#0a0a0a]">
               <h2 className="text-xl font-semibold mb-4 text-gray-900 dark:text-white">Error Type Distribution</h2>
               {errorDistribution.length === 0 ? (
-                <p className="text-gray-500 dark:text-gray-400">No error types recorded yet.</p>
+                <p className="text-gray-600 dark:text-gray-400">No error types recorded yet.</p>
               ) : (
                 <div className="space-y-3">
                   {errorDistribution.map((item, idx) => (
@@ -345,7 +529,7 @@ export default function AnalysisPage() {
                 <h2 className="text-xl font-semibold text-gray-900 dark:text-white">
                   Calls with "{selectedErrorType.replace(/_/g, " ")}" Error
                 </h2>
-                <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
+                <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
                   {filteredCalls.length} {filteredCalls.length === 1 ? "call" : "calls"} found
                 </p>
               </div>
@@ -361,10 +545,10 @@ export default function AnalysisPage() {
               </Button>
             </div>
 
-            {isLoadingCalls ? (
-              <div className="text-center py-8 text-gray-400">Loading calls...</div>
+                {isLoadingCalls ? (
+              <div className="text-center py-8 text-gray-600 dark:text-gray-400">Loading calls...</div>
             ) : filteredCalls.length === 0 ? (
-              <div className="text-center py-8 text-gray-400">No calls found with this error type.</div>
+              <div className="text-center py-8 text-gray-600 dark:text-gray-400">No calls found with this error type.</div>
             ) : (
               <div className="border border-gray-200 dark:border-gray-800 rounded-lg overflow-hidden">
                 <Table>
@@ -387,7 +571,7 @@ export default function AnalysisPage() {
                         <TableCell className="font-mono text-sm text-gray-700 dark:text-gray-300">
                           {call.callId}
                         </TableCell>
-                        <TableCell className="text-sm text-gray-500 dark:text-gray-400">
+                        <TableCell className="text-sm text-gray-600 dark:text-gray-400">
                           {formatDate(call.date)}
                         </TableCell>
                         <TableCell className="text-gray-700 dark:text-gray-300">
@@ -437,7 +621,7 @@ export default function AnalysisPage() {
                 <h2 className="text-xl font-semibold text-gray-900 dark:text-white">
                   Failure Mode: {selectedFailureMode}
                 </h2>
-                <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
+                <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
                   Generate test cases and create tickets for this failure mode
                 </p>
               </div>
@@ -465,9 +649,31 @@ export default function AnalysisPage() {
 
             {/* Test Cases */}
             <div className="mb-6">
-              <h3 className="text-lg font-semibold mb-3 text-gray-900 dark:text-white">Test Cases</h3>
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-lg font-semibold text-gray-900 dark:text-white">Test Cases</h3>
+                {testCases.length > 0 && (
+                  <div className="flex gap-2">
+                    <Button
+                      onClick={() => handleExportTestCases("csv")}
+                      variant="outline"
+                      size="sm"
+                      className="border-gray-300 dark:border-gray-800 bg-gray-50 dark:bg-gray-900/50 text-gray-700 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800"
+                    >
+                      📥 Export CSV
+                    </Button>
+                    <Button
+                      onClick={() => handleExportTestCases("txt")}
+                      variant="outline"
+                      size="sm"
+                      className="border-gray-300 dark:border-gray-800 bg-gray-50 dark:bg-gray-900/50 text-gray-700 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800"
+                    >
+                      📥 Export TXT
+                    </Button>
+                  </div>
+                )}
+              </div>
               {testCases.length === 0 ? (
-                <p className="text-gray-500 dark:text-gray-400 text-sm">No test cases yet. Click "Generate Test Case" to create one.</p>
+                <p className="text-gray-600 dark:text-gray-400 text-sm">No test cases yet. Use the chat to generate test cases or click "Generate Test Case" above.</p>
               ) : (
                 <div className="space-y-4">
                   {testCases.map((testCase) => (

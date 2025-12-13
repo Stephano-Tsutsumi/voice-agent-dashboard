@@ -147,8 +147,8 @@ export default function Dashboard() {
       <div className="max-w-7xl mx-auto">
         <div className="flex items-center justify-between mb-8">
           <div>
-            <h1 className="text-3xl font-bold mb-2 text-white dark:text-white">Calls Dashboard</h1>
-            <p className="text-gray-400 dark:text-gray-400">Monitor and analyze voice agent performance</p>
+            <h1 className="text-3xl font-bold mb-2 text-gray-900 dark:text-white">Calls Dashboard</h1>
+            <p className="text-gray-600 dark:text-gray-400">Monitor and analyze voice agent performance</p>
           </div>
           <div className="flex items-center gap-3">
             <Link href="/rag-upload">
@@ -159,7 +159,7 @@ export default function Dashboard() {
             </Link>
             <ThemeToggle />
             <Link href="/">
-              <Button variant="outline" className="border-gray-800 bg-gray-900/50 text-gray-400 hover:bg-gray-800 hover:text-gray-300 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300">New Call</Button>
+              <Button variant="outline" className="border-gray-300 dark:border-gray-800 bg-gray-50 dark:bg-gray-900/50 text-gray-700 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 hover:text-gray-900 dark:hover:text-gray-300">New Call</Button>
             </Link>
           </div>
         </div>
@@ -172,7 +172,7 @@ export default function Dashboard() {
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder="Search by Call ID, Bot, or transcript..."
-              className="flex-1 px-4 py-2 rounded-md border border-gray-300 dark:border-gray-800 bg-white dark:bg-gray-900/50 text-gray-900 dark:text-gray-300 placeholder-gray-500 dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-gray-500 dark:focus:ring-gray-600"
+              className="flex-1 px-4 py-2 rounded-md border border-gray-300 dark:border-gray-800 bg-white dark:bg-gray-900/50 text-gray-900 dark:text-gray-300 placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-gray-500 dark:focus:ring-gray-600"
             />
             <Button
               type="submit"
@@ -193,7 +193,7 @@ export default function Dashboard() {
             )}
           </form>
           {isSearching && (
-            <p className="mt-2 text-sm text-gray-500 dark:text-gray-400">
+            <p className="mt-2 text-sm text-gray-600 dark:text-gray-400">
               Showing {calls.length} result{calls.length !== 1 ? "s" : ""} for "{searchQuery}"
             </p>
           )}
@@ -228,7 +228,7 @@ export default function Dashboard() {
             <TableBody>
               {calls.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={10} className="text-center text-gray-500 dark:text-gray-400 py-8">
+                  <TableCell colSpan={10} className="text-center text-gray-600 dark:text-gray-400 py-8">
                     No calls yet. Start a new call to see it here.
                   </TableCell>
                 </TableRow>
@@ -250,7 +250,7 @@ export default function Dashboard() {
                         </Badge>
                       </TableCell>
                       <TableCell className="text-gray-700 dark:text-gray-300">{call.bot}</TableCell>
-                      <TableCell className="text-sm text-gray-500 dark:text-gray-400">{formatDate(call.date)}</TableCell>
+                      <TableCell className="text-sm text-gray-600 dark:text-gray-400">{formatDate(call.date)}</TableCell>
                       <TableCell className="text-gray-700 dark:text-gray-300">{formatDuration(call.duration)}</TableCell>
                       <TableCell>
                         <Badge variant="outline" className={statusBadge.className}>
@@ -271,14 +271,14 @@ export default function Dashboard() {
                               style={{ width: `${call.confidence}%` }}
                             />
                           </div>
-                          <span className="text-xs text-gray-500 dark:text-gray-400 w-10">{call.confidence}%</span>
+                          <span className="text-xs text-gray-600 dark:text-gray-400 w-10">{call.confidence}%</span>
                         </div>
                       </TableCell>
                       <TableCell className="text-2xl">{getSentimentEmoji(call.sentiment)}</TableCell>
                       <TableCell>
                         <div className="flex gap-1 flex-wrap">
                           {call.issues.length === 0 ? (
-                            <span className="text-xs text-gray-500 dark:text-gray-500">No issue</span>
+                            <span className="text-xs text-gray-600 dark:text-gray-400">No issue</span>
                           ) : (
                             <>
                               {call.issues.slice(0, 3).map((issue, idx) => (
@@ -311,7 +311,7 @@ export default function Dashboard() {
                             {call.annotation.reviewed ? "✓ Reviewed" : "📝 Annotated"}
                           </Badge>
                         ) : (
-                          <span className="text-xs text-gray-400">—</span>
+                          <span className="text-xs text-gray-500 dark:text-gray-400">—</span>
                         )}
                       </TableCell>
                     </TableRow>
