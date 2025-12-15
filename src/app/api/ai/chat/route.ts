@@ -1,52 +1,135 @@
 import { NextRequest, NextResponse } from "next/server";
 import OpenAI from "openai";
+import { getCallsByErrorType } from "@/lib/db";
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
+// Map natural phrases to canonical error types
+const ERROR_TYPE_ALIASES: Record<string, string> = {
+  tone_mismatch: "tone_mismatch",
+  "tone mismatch": "tone_mismatch",
+  missing_information: "missing_information",
+  "missing information": "missing_information",
+  incorrect_response: "incorrect_response",
+  "incorrect response": "incorrect_response",
+  technical_error: "technical_error",
+  "technical error": "technical_error",
+  timeout: "timeout",
+  "user_confusion": "user_confusion",
+  "user confusion": "user_confusion",
+  hallucination: "hallucination",
+  "external transfer": "ext_transfer",
+  ext_transfer: "ext_transfer",
+  "csr transfer": "csr_transfer",
+  csr_transfer: "csr_transfer",
+  expected: "expected",
+  unexpected: "unexpected",
+  unknown: "unknown",
+};
+
+function detectErrorTypeFromMessage(message: string): string | null {
+  const lower = message.toLowerCase();
+
+  // Direct alias match
+  for (const [phrase, canonical] of Object.entries(ERROR_TYPE_ALIASES)) {
+    if (lower.includes(phrase)) return canonical;
+  }
+
+  // Generic patterns: "error type X", "tagged with X"
+  const genericMatch =
+    lower.match(/error type\s+([a-z_ ]+)/i) ||
+    lower.match(/tagged with\s+([a-z_ ]+)/i);
+
+  if (genericMatch?.[1]) {
+    const key = genericMatch[1].trim().toLowerCase();
+    return ERROR_TYPE_ALIASES[key] || null;
+  }
+
+  return null;
+}
+
 export async function POST(request: NextRequest) {
   try {
     const { message, errorDistribution, failureModes, context } = await request.json();
-    
+
     if (!message) {
       return NextResponse.json({ error: "Message is required" }, { status: 400 });
     }
 
+    // STEP 2: infer error type from the user query (e.g. "unexpected", "unknown")
+    const inferredErrorType = detectErrorTypeFromMessage(message);
+    let callsContext = "";
+
+    if (inferredErrorType) {
+      // STEP 3: fetch calls by error type and build a compact observations summary
+      const calls = getCallsByErrorType(inferredErrorType);
+
+      if (calls.length === 0) {
+        callsContext = `You are analyzing error type "${inferredErrorType}", but there are currently no calls tagged with this error type. Explain that there is no data yet and suggest what kind of annotations would be useful to collect.`;
+      } else {
+        const summaries = calls
+          .slice(0, 50) // safety cap
+          .map((call) => ({
+            callId: call.callId,
+            date: call.date,
+            status: call.status,
+            errorType: call.annotation?.errorType || call.annotation?.errorTypeCustom,
+            failureMode: call.annotation?.failureMode,
+            observations: call.annotation?.observations,
+          }))
+          .filter((entry) => entry.observations && entry.observations.trim().length > 0);
+
+        callsContext = `You are currently analyzing calls tagged with error type "${inferredErrorType}". Here is a JSON array summarizing the most recent calls and their human-written observations:\n${JSON.stringify(
+          summaries,
+          null,
+          2
+        )}\n\nUse these observations to derive insights, common themes, and failure patterns. When the user asks for follow-up actions (like how to improve prompts), give concrete, implementation-ready suggestions.`;
+      }
+    }
+
+    // STEP 4: include observations in the system prompt so the LLM can answer with real insights
     const systemPrompt = `You are an AI assistant helping analyze voice agent failures. You can:
 1. Analyze error distributions and suggest common failure modes
 2. Generate test cases for failure modes
 3. Help identify patterns in voice agent errors
+4. Answer questions about calls and annotations
+5. Provide concrete, actionable recommendations to improve prompts, routing, and tagging
 
 You have access to:
 - Error Type Distribution: ${errorDistribution ? JSON.stringify(errorDistribution) : "No data"}
 - Existing Failure Modes: ${failureModes ? JSON.stringify(failureModes) : "No data"}
-${context ? `- Additional Context: ${context}` : ""}
+${context ? `- Additional Context: ${context}\n` : ""}${
+      callsContext ? `\n${callsContext}\n` : ""
+    }
 
-Be helpful, concise, and actionable. When suggesting failure modes or generating test cases, provide structured, usable output.`;
+When the user asks about a specific error type (for example "unexpected" or "unknown"):
+- First, summarize the key insights from the observations (why these calls failed, common themes, user intent patterns, etc.).
+- Then, when they ask for follow-up actions, respond with specific, implementation-ready steps (e.g., how to change prompts, routing logic, or tagging rules).
+Keep answers concise but insightful.`;
 
     const completion = await openai.chat.completions.create({
       model: "gpt-4",
       messages: [
-        {
-          role: "system",
-          content: systemPrompt,
-        },
-        {
-          role: "user",
-          content: message,
-        },
+        { role: "system", content: systemPrompt },
+        { role: "user", content: message },
       ],
       temperature: 0.7,
     });
 
-    const response = completion.choices[0].message.content || "I'm sorry, I couldn't generate a response.";
+    const response =
+      completion.choices[0].message.content ||
+      "I'm sorry, I couldn't generate a response.";
 
-    return NextResponse.json({ response });
+    return NextResponse.json({ response, errorType: inferredErrorType || null });
   } catch (error) {
     console.error("Error in chat:", error);
     return NextResponse.json(
-      { error: "Failed to process chat message", details: error instanceof Error ? error.message : String(error) },
+      {
+        error: "Failed to process chat message",
+        details: error instanceof Error ? error.message : String(error),
+      },
       { status: 500 }
     );
   }

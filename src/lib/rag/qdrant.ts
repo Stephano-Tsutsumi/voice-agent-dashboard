@@ -123,9 +123,9 @@ export async function getCollectionStats() {
   try {
     const info = await qdrantClient.getCollection(COLLECTION_NAME);
     return {
-      pointsCount: info.points_count,
-      vectorsCount: info.vectors_count,
-      indexedVectorsCount: info.indexed_vectors_count,
+      pointsCount: info.points_count || 0,
+      indexedVectorsCount: info.indexed_vectors_count || 0,
+      segmentsCount: info.segments_count || 0,
     };
   } catch (error) {
     console.error("Error getting collection stats:", error);

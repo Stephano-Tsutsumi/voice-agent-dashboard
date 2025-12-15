@@ -2,7 +2,7 @@ export type CallSeverity = "Low" | "Medium" | "High";
 export type CallStatus = "Completed" | "Escalated" | "Failed";
 export type CallSentiment = "positive" | "neutral" | "negative";
 
-export type ErrorType = 
+export type ErrorType =
   | "tone_mismatch"
   | "missing_information"
   | "incorrect_response"
@@ -10,6 +10,11 @@ export type ErrorType =
   | "timeout"
   | "user_confusion"
   | "hallucination"
+  | "ext_transfer"
+  | "csr_transfer"
+  | "expected"
+  | "unexpected"
+  | "unknown"
   | "other";
 
 export interface Annotation {
@@ -17,9 +22,9 @@ export interface Annotation {
   errorType?: ErrorType;
   errorTypeCustom?: string;
   observations: string;
-  failureMode?: string; // AI-categorized failure mode
-  suggestedFix?: string; // AI-suggested fix
-  reviewed?: boolean; // Human reviewed the AI categorization
+  failureMode?: string;
+  suggestedFix?: string;
+  reviewed?: boolean;
   createdAt?: Date;
 }
 
@@ -29,61 +34,20 @@ export interface Call {
   severity: CallSeverity;
   bot: string;
   date: Date;
-  duration: number; // in seconds
+  duration: number;
   status: CallStatus;
-  confidence: number; // 0-100
+  confidence: number;
   sentiment: CallSentiment;
   issues: string[];
   transcript?: string;
   annotation?: Annotation;
-  history?: any[]; // Full call history for detailed view
+  history?: any[];
 }
 
-// Store calls in localStorage for persistence
-const STORAGE_KEY = "voice-agent-calls";
+// ------- Metrics & utility helpers used on the client -------
 
-export function saveCall(call: Call): void {
-  const calls = getCalls();
-  calls.push(call);
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(calls));
-}
-
-export function getCalls(): Call[] {
-  if (typeof window === "undefined") return [];
-  const stored = localStorage.getItem(STORAGE_KEY);
-  if (!stored) return [];
-  const calls = JSON.parse(stored);
-  // Convert date strings back to Date objects
-  return calls.map((call: any) => ({
-    ...call,
-    date: new Date(call.date),
-  }));
-}
-
-export function deleteCall(id: string): void {
-  const calls = getCalls();
-  const filtered = calls.filter((call) => call.id !== id);
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(filtered));
-}
-
-export async function generateCallId(): Promise<string> {
-  try {
-    const response = await fetch("/api/calls");
-    const calls = await response.json();
-    const num = calls.length + 1;
-    return `INT-2024-${String(num).padStart(6, "0")}`;
-  } catch (error) {
-    // Fallback if API is not available
-    const num = Math.floor(Math.random() * 1000000) + 1;
-    return `INT-2024-${String(num).padStart(6, "0")}`;
-  }
-}
-
-// Calculate metrics from call history
 export function calculateConfidence(history: any[]): number {
-  // Simple calculation based on successful interactions
-  // In a real app, this would be more sophisticated
-  if (history.length === 0) return 0;
+  if (!Array.isArray(history) || history.length === 0) return 0;
   const successfulInteractions = history.filter(
     (item) => item.type === "message" && item.role === "assistant"
   ).length;
@@ -91,13 +55,11 @@ export function calculateConfidence(history: any[]): number {
 }
 
 export function calculateSentiment(history: any[]): CallSentiment {
-  // Simple sentiment calculation
-  // In a real app, this would use NLP
-  const assistantMessages = history.filter(
-    (item) => item.type === "message" && item.role === "assistant"
-  );
+  // Placeholder sentiment logic – can be replaced with real NLP later
+  const assistantMessages = Array.isArray(history)
+    ? history.filter((item) => item.type === "message" && item.role === "assistant")
+    : [];
   if (assistantMessages.length === 0) return "neutral";
-  // For now, return neutral - could be enhanced with actual sentiment analysis
   return "neutral";
 }
 
@@ -113,23 +75,36 @@ export function calculateSeverity(
 
 export function detectIssues(history: any[], status: CallStatus): string[] {
   const issues: string[] = [];
-  
+
   if (status === "Failed") {
     issues.push("FALLBA");
   }
   if (status === "Escalated") {
     issues.push("ESCALA");
   }
-  
-  // Check for low confidence
-  const confidence = calculateConfidence(history);
+
+  const confidence = calculateConfidence(history || []);
   if (confidence < 50) {
     issues.push("LOW CONFID");
   }
-  
-  // Check for API errors (would need to track these)
-  // For now, we'll add placeholder issues
-  
+
   return issues;
 }
+
+// Generate a human-readable call ID based on current calls in the system.
+// Falls back to a random ID if the API is unavailable.
+export async function generateCallId(): Promise<string> {
+  try {
+    const response = await fetch("/api/calls");
+    if (!response.ok) throw new Error("Failed to fetch calls");
+    const calls: Call[] = await response.json();
+    const num = (Array.isArray(calls) ? calls.length : 0) + 1;
+    return `INT-2024-${String(num).padStart(6, "0")}`;
+  } catch {
+    const num = Math.floor(Math.random() * 1_000_000) + 1;
+    return `INT-2024-${String(num).padStart(6, "0")}`;
+  }
+}
+
+
 

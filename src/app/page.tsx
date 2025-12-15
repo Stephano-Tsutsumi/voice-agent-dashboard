@@ -90,11 +90,32 @@ const agent = new RealtimeAgent({
 
 export default function Home() {
   const session = useRef<RealtimeSession | null>(null);
+  const localStreamRef = useRef<MediaStream | null>(null);
   const [connected, setConnected] = useState(false);
   const [history, setHistory] = useState<RealtimeItem[]>([]);
   const [error, setError] = useState<string | null>(null);
   const callStartTime = useRef<Date | null>(null);
   const callId = useRef<string | null>(null);
+
+  // Ensure microphone and any local media tracks are fully stopped
+  async function stopLocalMedia() {
+    try {
+      if (localStreamRef.current) {
+        localStreamRef.current.getTracks().forEach((track) => track.stop());
+        localStreamRef.current = null;
+        return;
+      }
+
+      // Fallback: request a short-lived stream just to ensure all tracks are released.
+      if (typeof navigator !== "undefined" && navigator.mediaDevices?.getUserMedia) {
+        const tmpStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        tmpStream.getTracks().forEach((track) => track.stop());
+      }
+    } catch (e) {
+      // Swallow errors – this is best-effort cleanup and should not block UI
+      console.warn("Failed to fully stop local media tracks:", e);
+    }
+  }
 
   async function onConnect() {
     if (connected) {
@@ -172,6 +193,9 @@ export default function Home() {
       callStartTime.current = null;
       callId.current = null;
       setHistory([]);
+
+      // Make sure microphone is fully released
+      await stopLocalMedia();
     } else {
       try {
         setError(null);
@@ -234,6 +258,7 @@ export default function Home() {
         
         console.log("Connecting with token...");
         try {
+          // Establish connection – RealtimeSession will manage WebRTC + audio
           await session.current.connect({
             apiKey: token,
           });

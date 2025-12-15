@@ -19,6 +19,11 @@ const ERROR_TYPES: Array<{ value: ErrorType; label: string }> = [
   { value: "timeout", label: "Timeout" },
   { value: "user_confusion", label: "User Confusion" },
   { value: "hallucination", label: "Hallucination" },
+  { value: "ext_transfer", label: "External Transfer" },
+  { value: "csr_transfer", label: "CSR Transfer" },
+  { value: "expected", label: "Expected" },
+  { value: "unexpected", label: "Unexpected" },
+  { value: "unknown", label: "Unknown" },
   { value: "other", label: "Other" },
 ];
 
