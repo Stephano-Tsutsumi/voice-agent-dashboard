@@ -86,12 +86,27 @@ export function getDatabase(): Database.Database {
       FOREIGN KEY (testCaseId) REFERENCES test_cases(id) ON DELETE SET NULL
     );
     
+    CREATE TABLE IF NOT EXISTS prompts (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      description TEXT,
+      content TEXT NOT NULL,
+      category TEXT,
+      version INTEGER DEFAULT 1,
+      isActive INTEGER DEFAULT 0,
+      tags TEXT,
+      createdAt TEXT DEFAULT CURRENT_TIMESTAMP,
+      updatedAt TEXT DEFAULT CURRENT_TIMESTAMP
+    );
+    
     CREATE INDEX IF NOT EXISTS idx_annotation_callId ON annotations(callId);
     CREATE INDEX IF NOT EXISTS idx_annotation_errorType ON annotations(errorType);
     CREATE INDEX IF NOT EXISTS idx_annotation_failureMode ON annotations(failureMode);
     CREATE INDEX IF NOT EXISTS idx_test_case_failureMode ON test_cases(failureMode);
     CREATE INDEX IF NOT EXISTS idx_ticket_failureMode ON tickets(failureMode);
     CREATE INDEX IF NOT EXISTS idx_ticket_testCaseId ON tickets(testCaseId);
+    CREATE INDEX IF NOT EXISTS idx_prompts_category ON prompts(category);
+    CREATE INDEX IF NOT EXISTS idx_prompts_isActive ON prompts(isActive);
   `);
 
   // Migrate existing calls table to add history column if it doesn't exist
@@ -482,6 +497,97 @@ export function getTicketsByFailureMode(failureMode: string): Ticket[] {
     createdAt: new Date(row.createdAt),
     updatedAt: new Date(row.updatedAt),
   }));
+}
+
+export interface Prompt {
+  id: string;
+  name: string;
+  description?: string;
+  content: string;
+  category?: string;
+  version: number;
+  isActive: boolean;
+  tags?: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export function savePrompt(prompt: Prompt): void {
+  try {
+    const database = getDatabase();
+    const stmt = database.prepare(`
+      INSERT OR REPLACE INTO prompts (
+        id, name, description, content, category, version, isActive, tags, updatedAt
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+    `);
+    
+    stmt.run(
+      prompt.id,
+      prompt.name,
+      prompt.description || null,
+      prompt.content,
+      prompt.category || null,
+      prompt.version,
+      prompt.isActive ? 1 : 0,
+      prompt.tags || null,
+    );
+    
+    console.log("Prompt saved:", prompt.id);
+  } catch (error) {
+    console.error("Error saving prompt:", error);
+    throw error;
+  }
+}
+
+export function getPrompts(): Prompt[] {
+  const database = getDatabase();
+  const stmt = database.prepare(`
+    SELECT * FROM prompts
+    ORDER BY updatedAt DESC
+  `);
+  const rows = stmt.all() as any[];
+  
+  return rows.map((row) => ({
+    id: row.id,
+    name: row.name,
+    description: row.description || undefined,
+    content: row.content,
+    category: row.category || undefined,
+    version: row.version,
+    isActive: row.isActive === 1,
+    tags: row.tags || undefined,
+    createdAt: new Date(row.createdAt),
+    updatedAt: new Date(row.updatedAt),
+  }));
+}
+
+export function getPromptById(id: string): Prompt | null {
+  const database = getDatabase();
+  const stmt = database.prepare(`
+    SELECT * FROM prompts WHERE id = ?
+  `);
+  const row = stmt.get(id) as any;
+  
+  if (!row) return null;
+  
+  return {
+    id: row.id,
+    name: row.name,
+    description: row.description || undefined,
+    content: row.content,
+    category: row.category || undefined,
+    version: row.version,
+    isActive: row.isActive === 1,
+    tags: row.tags || undefined,
+    createdAt: new Date(row.createdAt),
+    updatedAt: new Date(row.updatedAt),
+  };
+}
+
+export function deletePrompt(id: string): void {
+  const database = getDatabase();
+  const stmt = database.prepare(`DELETE FROM prompts WHERE id = ?`);
+  stmt.run(id);
 }
 
 export function getCallsByErrorType(errorType: string): Call[] {

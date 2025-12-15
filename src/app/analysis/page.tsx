@@ -534,6 +534,11 @@ ${"=".repeat(50)}
             >
               {showTestCaseManagement ? "Hide" : "Manage Test Cases"} ({allTestCases.length})
             </Button>
+            <Link href="/prompt-manager">
+              <Button variant="outline" className="border-gray-300 dark:border-gray-800 bg-gray-50 dark:bg-gray-900/50 text-gray-700 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800">
+                Prompt Manager
+              </Button>
+            </Link>
             <Link href="/dashboard">
               <Button variant="outline" className="border-gray-300 dark:border-gray-800 bg-gray-50 dark:bg-gray-900/50 text-gray-700 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800">
                 Back to Dashboard

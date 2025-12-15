@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import OpenAI from "openai";
 import { getCallsByErrorType } from "@/lib/db";
+import { searchKnowledgeBase } from "@/lib/rag";
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
@@ -50,12 +51,59 @@ function detectErrorTypeFromMessage(message: string): string | null {
   return null;
 }
 
+function isPromptImprovementQuestion(message: string): boolean {
+  const lower = message.toLowerCase();
+  const promptKeywords = [
+    "prompt improvement",
+    "improve prompt",
+    "how to improve",
+    "better prompt",
+    "prompt recommendation",
+    "prompt suggestions",
+    "voice agent improvement",
+    "how to improve voice agent",
+    "agent improvement",
+    "prompt optimization",
+    "optimize prompt",
+  ];
+  
+  return promptKeywords.some(keyword => lower.includes(keyword));
+}
+
 export async function POST(request: NextRequest) {
   try {
     const { message, errorDistribution, failureModes, context } = await request.json();
 
     if (!message) {
       return NextResponse.json({ error: "Message is required" }, { status: 400 });
+    }
+
+    // Check if this is a prompt improvement question
+    const isPromptQuestion = isPromptImprovementQuestion(message);
+    let ragContext = "";
+
+    if (isPromptQuestion) {
+      // Use RAG to search for voice agent evaluation guidelines
+      try {
+        const searchQuery = message.includes("voice agent") 
+          ? message 
+          : `${message} voice agent evaluation guidelines`;
+        
+        const ragResults = await searchKnowledgeBase(searchQuery, 5);
+        
+        if (ragResults.length > 0) {
+          const guidelinesText = ragResults
+            .map((result, idx) => `[${idx + 1}] ${result.content}\n   Source: ${result.metadata.title || result.metadata.source || "Voice Agent Evals Guidelines"}`)
+            .join("\n\n");
+          
+          ragContext = `You are a prompt improvement specialist. Use the following Voice Agent Evaluation Guidelines as your reference material:\n\n${guidelinesText}\n\nBased on these guidelines and the user's question, provide specific, actionable prompt improvement recommendations. Reference the guidelines when making suggestions.`;
+        } else {
+          ragContext = "You are a prompt improvement specialist. The user is asking about prompt improvements, but no evaluation guidelines have been uploaded yet. Provide general best practices for voice agent prompt engineering based on your knowledge.";
+        }
+      } catch (error) {
+        console.error("Error searching knowledge base:", error);
+        ragContext = "You are a prompt improvement specialist. Provide recommendations based on best practices for voice agent prompt engineering.";
+      }
     }
 
     // STEP 2: infer error type from the user query (e.g. "unexpected", "unknown")
@@ -90,7 +138,28 @@ export async function POST(request: NextRequest) {
     }
 
     // STEP 4: include observations in the system prompt so the LLM can answer with real insights
-    const systemPrompt = `You are an AI assistant helping analyze voice agent failures. You can:
+    let systemPrompt = "";
+    
+    if (isPromptQuestion && ragContext) {
+      // Specialized prompt improvement sub-agent
+      systemPrompt = `${ragContext}
+
+You have access to:
+- Error Type Distribution: ${errorDistribution ? JSON.stringify(errorDistribution) : "No data"}
+- Existing Failure Modes: ${failureModes ? JSON.stringify(failureModes) : "No data"}
+${context ? `- Additional Context: ${context}\n` : ""}${
+        callsContext ? `\n${callsContext}\n` : ""
+      }
+
+When providing prompt improvement recommendations:
+- Be specific and actionable
+- Reference the evaluation guidelines when applicable
+- Consider the failure modes and error patterns in the data
+- Provide concrete examples of improved prompts
+- Explain why your suggestions will help`;
+    } else {
+      // Standard analysis assistant
+      systemPrompt = `You are an AI assistant helping analyze voice agent failures. You can:
 1. Analyze error distributions and suggest common failure modes
 2. Generate test cases for failure modes
 3. Help identify patterns in voice agent errors
@@ -101,13 +170,14 @@ You have access to:
 - Error Type Distribution: ${errorDistribution ? JSON.stringify(errorDistribution) : "No data"}
 - Existing Failure Modes: ${failureModes ? JSON.stringify(failureModes) : "No data"}
 ${context ? `- Additional Context: ${context}\n` : ""}${
-      callsContext ? `\n${callsContext}\n` : ""
-    }
+        callsContext ? `\n${callsContext}\n` : ""
+      }
 
 When the user asks about a specific error type (for example "unexpected" or "unknown"):
 - First, summarize the key insights from the observations (why these calls failed, common themes, user intent patterns, etc.).
 - Then, when they ask for follow-up actions, respond with specific, implementation-ready steps (e.g., how to change prompts, routing logic, or tagging rules).
 Keep answers concise but insightful.`;
+    }
 
     const completion = await openai.chat.completions.create({
       model: "gpt-4",
