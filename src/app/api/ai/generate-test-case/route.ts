@@ -25,16 +25,19 @@ ${exampleCalls && exampleCalls.length > 0 ? `Example calls that exhibited this f
 
 Create a test case that:
 1. Is the simplest possible scenario to reproduce the failure
-2. Has clear, step-by-step instructions
-3. Includes expected vs actual behavior
-4. Can be used in UAT (User Acceptance Testing)
+2. Has a clear persona and user input/value
+3. Includes the expected agent response
+4. Specifies an escalation path (if any)
+5. Can be used in UAT (User Acceptance Testing)
 
 Return a JSON object with:
 {
-  "testCase": "Brief description of the test case",
-  "steps": "Step-by-step instructions to reproduce (numbered list)",
-  "expectedResult": "What should happen",
-  "actualResult": "What actually happens (the failure)"
+  "testCaseId": "Short identifier for this test case (e.g. TC_UNEXPECTED_001)",
+  "testScenario": "High-level scenario description (e.g. multiple household members)",
+  "personaType": "Persona description (e.g. multiple household members with 1 enrollment)",
+  "userInput": "What the user says or provides (e.g. user gives name with multiple household members)",
+  "expectedResponse": "What the assistant should say/do (e.g. ask if they need username for self or another household member, then provide the appropriate username)",
+  "escalationPath": "Escalation behavior if applicable (e.g. transferred to CSR, external transfer, etc.)"
 }`;
 
     const completion = await openai.chat.completions.create({
@@ -42,18 +45,36 @@ Return a JSON object with:
       messages: [
         {
           role: "system",
-          content: "You are an expert QA engineer specializing in creating minimal, reproducible test cases for AI voice agents. Always return valid JSON.",
+          content:
+            "You are an expert QA engineer specializing in creating minimal, reproducible test cases for AI voice agents. Always return a single valid JSON object matching the requested schema. Do not include any surrounding prose or markdown fences.",
         },
         {
           role: "user",
           content: prompt,
         },
       ],
-      response_format: { type: "json_object" },
       temperature: 0.3,
     });
 
-    const result = JSON.parse(completion.choices[0].message.content || "{}");
+    const rawContent = completion.choices[0].message.content || "";
+
+    // Try to extract JSON even if the model wraps it in prose or ```json fences
+    let jsonText = rawContent.trim();
+    const fenceMatch = jsonText.match(/```(?:json)?\s*([\s\S]*?)```/i);
+    if (fenceMatch && fenceMatch[1]) {
+      jsonText = fenceMatch[1].trim();
+    }
+
+    // Fallback: try to slice from first { to last }
+    if (!jsonText.startsWith("{")) {
+      const first = jsonText.indexOf("{");
+      const last = jsonText.lastIndexOf("}");
+      if (first !== -1 && last !== -1 && last > first) {
+        jsonText = jsonText.slice(first, last + 1);
+      }
+    }
+
+    const result = JSON.parse(jsonText);
     return NextResponse.json(result);
   } catch (error) {
     console.error("Error generating test case:", error);

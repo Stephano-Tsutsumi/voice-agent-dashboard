@@ -1,5 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getCalls, searchCalls, getCallById, saveCall, getFailureModes, getErrorTypeDistribution, getCallsByFailureMode } from "@/lib/db";
+import {
+  getCalls,
+  searchCalls,
+  getCallById,
+  saveCall,
+  getFailureModes,
+  getErrorTypeDistribution,
+  getCallsByFailureMode,
+} from "@/lib/db";
 import { type Call } from "@/lib/calls";
 
 export async function GET(request: NextRequest) {
@@ -8,6 +16,11 @@ export async function GET(request: NextRequest) {
     const search = searchParams.get("search");
     const callId = searchParams.get("callId");
     const failureMode = searchParams.get("failureMode");
+    const pageParam = searchParams.get("page");
+    const pageSizeParam = searchParams.get("pageSize");
+
+    const page = pageParam ? Math.max(parseInt(pageParam, 10) || 1, 1) : 1;
+    const pageSize = pageSizeParam ? Math.max(parseInt(pageSizeParam, 10) || 8, 1) : 8;
 
     if (callId) {
       const call = getCallById(callId);
@@ -22,12 +35,30 @@ export async function GET(request: NextRequest) {
       return NextResponse.json(calls);
     }
 
+    let calls: Call[] = [];
+
     if (search) {
-      const calls = searchCalls(search);
-      return NextResponse.json(calls);
+      calls = searchCalls(search);
+    } else {
+      calls = getCalls();
     }
 
-    const calls = getCalls();
+    // If pagination is requested, return a paginated payload
+    if (searchParams.has("page") || searchParams.has("pageSize")) {
+      const total = calls.length;
+      const start = (page - 1) * pageSize;
+      const end = start + pageSize;
+      const pageItems = calls.slice(start, end);
+
+      return NextResponse.json({
+        calls: pageItems,
+        total,
+        page,
+        pageSize,
+      });
+    }
+
+    // Backwards-compatible: return full array if no pagination params provided
     return NextResponse.json(calls);
   } catch (error) {
     console.error("Error fetching calls:", error);

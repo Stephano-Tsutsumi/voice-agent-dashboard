@@ -184,20 +184,32 @@ export default function AnalysisPage() {
       }
 
       const data = await response.json();
-      
-      // Validate response has required fields
-      if (!data.testCase && !data.test_case) {
-        throw new Error("Invalid test case response: missing testCase field");
-      }
-      
-      // Save test case
+
+      // Map new structured fields from the AI into our test case model
+      const testScenario =
+        data.testScenario || data.test_case || data.testCase || "Test scenario";
+      const personaType = data.personaType || "";
+      const userInput = data.userInput || "";
+      const expectedResponse =
+        data.expectedResponse || data.expectedResult || data.expected_result || "";
+      const escalationPath = data.escalationPath || data.actualResult || data.actual_result || "";
+
+      // Build a human-readable steps string from the structured fields
+      const stepsLines = [
+        personaType ? `Persona Type: ${personaType}` : null,
+        userInput ? `User Input/Value: ${userInput}` : null,
+      ].filter(Boolean);
+
+      const steps = stepsLines.join("\n");
+
+      // Save test case using our existing schema
       const testCase: TestCase = {
         id: `tc_${Date.now()}_${Math.random().toString(36).substring(7)}`,
         failureMode: failureMode.replace(/\s+/g, "_").toLowerCase(),
-        testCase: data.testCase || data.test_case || "Test case",
-        steps: typeof data.steps === 'string' ? data.steps : JSON.stringify(data.steps),
-        expectedResult: data.expectedResult || data.expected_result || undefined,
-        actualResult: data.actualResult || data.actual_result || undefined,
+        testCase: typeof testScenario === "string" ? testScenario : JSON.stringify(testScenario),
+        steps: steps || "See persona, user input, and expected response for details.",
+        expectedResult: expectedResponse || undefined,
+        actualResult: escalationPath || undefined,
         status: "draft",
         createdAt: new Date(),
         updatedAt: new Date(),
@@ -220,7 +232,7 @@ export default function AnalysisPage() {
         ...prev,
         { 
           role: "assistant", 
-          content: `✅ Test case generated and saved!\n\n**Test Case:** ${data.testCase}\n\n**Steps:**\n${data.steps}\n\nYou can view and manage all test cases using the "Manage Test Cases" button.` 
+          content: `✅ Test case generated and saved!\n\n**Test Scenario:** ${testScenario}\n\n**Persona Type:** ${personaType || "N/A"}\n**User Input/Value:** ${userInput || "N/A"}\n**Expected Response:** ${expectedResponse || "N/A"}\n**Escalation Path:** ${escalationPath || "N/A"}\n\nYou can view and manage all test cases using the "Manage Test Cases" button.` 
         },
       ]);
     } catch (error) {

@@ -73,22 +73,35 @@ export default function Dashboard() {
   const [searchQuery, setSearchQuery] = useState("");
   const [isSearching, setIsSearching] = useState(false);
   const [selectedCall, setSelectedCall] = useState<Call | null>(null);
+  const [page, setPage] = useState(1);
+  const [pageSize] = useState(8);
+  const [total, setTotal] = useState(0);
 
-  const fetchCalls = async (search?: string) => {
+  const fetchCalls = async (search?: string, pageOverride?: number) => {
     try {
-      const url = search
-        ? `/api/calls?search=${encodeURIComponent(search)}`
-        : "/api/calls";
-      const response = await fetch(url);
+      const currentPage = pageOverride ?? page;
+      const params = new URLSearchParams();
+      params.set("page", String(currentPage));
+      params.set("pageSize", String(pageSize));
+      if (search) {
+        params.set("search", search);
+      }
+
+      const response = await fetch(`/api/calls?${params.toString()}`);
       const data = await response.json();
-      
+
+      const rawCalls: any[] = Array.isArray(data) ? data : data.calls ?? [];
+      const totalCount: number = Array.isArray(data) ? rawCalls.length : data.total ?? rawCalls.length;
+
       // Convert date strings to Date objects
-      const callsWithDates = data.map((call: any) => ({
+      const callsWithDates = rawCalls.map((call: any) => ({
         ...call,
         date: call.date instanceof Date ? call.date : new Date(call.date),
       }));
-      
+
       setCalls(callsWithDates);
+      setTotal(totalCount);
+      setPage(currentPage);
     } catch (error) {
       console.error("Failed to fetch calls:", error);
     }
@@ -96,30 +109,31 @@ export default function Dashboard() {
 
   useEffect(() => {
     fetchCalls();
-    // Refresh every 2 seconds to get new calls
+    // Refresh every 2 seconds to get new calls on the current page
     const interval = setInterval(() => {
       if (!isSearching) {
-        fetchCalls();
+        fetchCalls(undefined, page);
       }
     }, 2000);
     return () => clearInterval(interval);
-  }, [isSearching]);
+  }, [isSearching, page]);
 
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
     if (searchQuery.trim()) {
       setIsSearching(true);
-      fetchCalls(searchQuery.trim());
+      // Reset to first page on new search
+      fetchCalls(searchQuery.trim(), 1);
     } else {
       setIsSearching(false);
-      fetchCalls();
+      fetchCalls(undefined, 1);
     }
   };
 
   const handleClearSearch = () => {
     setSearchQuery("");
     setIsSearching(false);
-    fetchCalls();
+    fetchCalls(undefined, 1);
   };
 
   const handleSaveAnnotation = async (callId: string, annotation: Annotation) => {
@@ -321,6 +335,50 @@ export default function Dashboard() {
             </TableBody>
           </Table>
         </div>
+
+        {/* Pagination */}
+        {total > 0 && (
+          <div className="mt-4 flex items-center justify-between text-sm text-gray-700 dark:text-gray-300">
+            <div>
+              {(() => {
+                const start = (page - 1) * pageSize + 1;
+                const end = Math.min(page * pageSize, total);
+                return `Showing ${start}-${end} of ${total} calls`;
+              })()}
+            </div>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={page === 1}
+                onClick={() => {
+                  if (page > 1) {
+                    fetchCalls(isSearching ? searchQuery.trim() || undefined : undefined, page - 1);
+                  }
+                }}
+                className="border-gray-300 dark:border-gray-800 bg-gray-50 dark:bg-gray-900/50 text-gray-700 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800"
+              >
+                Previous
+              </Button>
+              <span className="px-2">
+                Page {page} / {Math.max(1, Math.ceil(total / pageSize))}
+              </span>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={page * pageSize >= total}
+                onClick={() => {
+                  if (page * pageSize < total) {
+                    fetchCalls(isSearching ? searchQuery.trim() || undefined : undefined, page + 1);
+                  }
+                }}
+                className="border-gray-300 dark:border-gray-800 bg-gray-50 dark:bg-gray-900/50 text-gray-700 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800"
+              >
+                Next
+              </Button>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Call Detail Modal */}
