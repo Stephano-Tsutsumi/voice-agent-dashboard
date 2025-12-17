@@ -137,6 +137,12 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    // Check if user wants to create a ticket
+    const wantsTicket = message.toLowerCase().includes("create ticket") || 
+                       message.toLowerCase().includes("make ticket") ||
+                       message.toLowerCase().includes("generate ticket") ||
+                       message.toLowerCase().includes("ticket for");
+
     // STEP 4: include observations in the system prompt so the LLM can answer with real insights
     let systemPrompt = "";
     
@@ -157,6 +163,33 @@ When providing prompt improvement recommendations:
 - Consider the failure modes and error patterns in the data
 - Provide concrete examples of improved prompts
 - Explain why your suggestions will help`;
+    } else if (wantsTicket) {
+      // Ticket creation assistant
+      systemPrompt = `You are an AI assistant helping create bug tickets for voice agent failures. When the user asks to create a ticket, generate a well-structured ticket in JSON format.
+
+You have access to:
+- Error Type Distribution: ${errorDistribution ? JSON.stringify(errorDistribution) : "No data"}
+- Existing Failure Modes: ${failureModes ? JSON.stringify(failureModes) : "No data"}
+${context ? `- Additional Context: ${context}\n` : ""}${
+        callsContext ? `\n${callsContext}\n` : ""
+      }
+
+When creating a ticket, return a JSON object with this exact structure:
+{
+  "title": "Clear, concise bug title",
+  "description": "Detailed description including steps to reproduce, expected vs actual behavior, and impact",
+  "priority": "low|medium|high|critical"
+}
+
+The description should be comprehensive and include:
+- What the issue is
+- Steps to reproduce (if applicable)
+- Expected behavior
+- Actual behavior
+- Impact on users
+- Any relevant context from the observations
+
+Return ONLY the JSON object, no additional text.`;
     } else {
       // Standard analysis assistant
       systemPrompt = `You are an AI assistant helping analyze voice agent failures. You can:
@@ -165,6 +198,7 @@ When providing prompt improvement recommendations:
 3. Help identify patterns in voice agent errors
 4. Answer questions about calls and annotations
 5. Provide concrete, actionable recommendations to improve prompts, routing, and tagging
+6. Create bug tickets when requested
 
 You have access to:
 - Error Type Distribution: ${errorDistribution ? JSON.stringify(errorDistribution) : "No data"}

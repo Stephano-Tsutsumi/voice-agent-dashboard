@@ -8,7 +8,7 @@ export async function getSessionToken() {
   const sessionConfig = JSON.stringify({
     session: {
       type: "realtime",
-      model: "gpt-4o-realtime-preview",
+      model: "gpt-realtime-mini-2025-12-15",
       audio: {
         output: {
           voice: "alloy",

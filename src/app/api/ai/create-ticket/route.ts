@@ -44,18 +44,25 @@ Return a JSON object with:
       messages: [
         {
           role: "system",
-          content: "You are an expert at creating clear, actionable bug tickets for AI voice agents. Always return valid JSON.",
+          content: "You are an expert at creating clear, actionable bug tickets for AI voice agents. Always return a single valid JSON object matching the requested schema. Do not include any surrounding prose or markdown fences.",
         },
         {
           role: "user",
           content: prompt,
         },
       ],
-      response_format: { type: "json_object" },
       temperature: 0.3,
     });
 
-    const result = JSON.parse(completion.choices[0].message.content || "{}");
+    let content = completion.choices[0].message.content || "{}";
+    
+    // Extract JSON from markdown code blocks if present
+    const jsonMatch = content.match(/```(?:json)?\s*(\{[\s\S]*\})\s*```/) || content.match(/(\{[\s\S]*\})/);
+    if (jsonMatch) {
+      content = jsonMatch[1];
+    }
+    
+    const result = JSON.parse(content);
     return NextResponse.json(result);
   } catch (error) {
     console.error("Error creating ticket:", error);

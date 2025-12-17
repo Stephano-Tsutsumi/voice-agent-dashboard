@@ -45,7 +45,26 @@ export default function AnalysisPage() {
   useEffect(() => {
     fetchAnalysis();
     fetchAllTestCases();
+    fetchAllTickets();
   }, []);
+
+  const fetchAllTickets = async () => {
+    try {
+      const response = await fetch("/api/tickets?all=true");
+      if (response.ok) {
+        const data = await response.json();
+        // Ensure dates are Date objects
+        const ticketsWithDates = data.map((t: any) => ({
+          ...t,
+          createdAt: t.createdAt ? new Date(t.createdAt) : new Date(),
+          updatedAt: t.updatedAt ? new Date(t.updatedAt) : new Date(),
+        }));
+        setTickets(ticketsWithDates);
+      }
+    } catch (error) {
+      console.error("Failed to fetch tickets:", error);
+    }
+  };
 
   const fetchAllTestCases = async () => {
     try {
@@ -276,7 +295,79 @@ export default function AnalysisPage() {
 
       const data = await response.json();
       const assistantResponse = data.response;
+      const inferredErrorType = data.errorType || null;
       setChatMessages((prev) => [...prev, { role: "assistant", content: assistantResponse }]);
+
+      // Check if user wants to create a ticket
+      const wantsTicket = userMessage.toLowerCase().includes("create ticket") || 
+                         userMessage.toLowerCase().includes("make ticket") ||
+                         userMessage.toLowerCase().includes("generate ticket") ||
+                         userMessage.toLowerCase().includes("ticket for");
+      
+      if (wantsTicket) {
+        // Try to extract ticket information from the response
+        try {
+          const ticketMatch = assistantResponse.match(/\{[\s\S]*"title"[\s\S]*\}/) ||
+                             assistantResponse.match(/title[:\s]+([^\n]+)/i);
+          
+          if (ticketMatch) {
+            let ticketData;
+            try {
+              ticketData = JSON.parse(ticketMatch[0]);
+            } catch {
+              // Try to construct from text
+              const titleMatch = assistantResponse.match(/title[:\s]+([^\n]+)/i);
+              const descMatch = assistantResponse.match(/description[:\s]+([^\n]+(?:\n(?!priority|status)[^\n]+)*)/i);
+              const priorityMatch = assistantResponse.match(/priority[:\s]+(low|medium|high|critical)/i);
+              
+              if (titleMatch) {
+                ticketData = {
+                  title: titleMatch[1].trim(),
+                  description: descMatch ? descMatch[1].trim() : assistantResponse,
+                  priority: priorityMatch ? priorityMatch[1].toLowerCase() : "medium",
+                };
+              }
+            }
+            
+            if (ticketData && ticketData.title) {
+              // Extract failure mode from context
+              const failureMode = inferredErrorType || 
+                                errorDistribution.length > 0 ? errorDistribution[0].type : 
+                                "general";
+              
+              const ticket: Ticket = {
+                id: `ticket_${Date.now()}_${Math.random().toString(36).substring(7)}`,
+                failureMode: failureMode.replace(/\s+/g, "_").toLowerCase(),
+                title: ticketData.title,
+                description: ticketData.description || ticketData.title,
+                priority: ticketData.priority || "medium",
+                status: "open",
+                createdAt: new Date(),
+                updatedAt: new Date(),
+              };
+
+              const saveResponse = await fetch("/api/tickets", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(ticket),
+              });
+
+              if (saveResponse.ok) {
+                await fetchAllTickets();
+                setChatMessages((prev) => [
+                  ...prev.slice(0, -1), // Remove last message
+                  { 
+                    role: "assistant", 
+                    content: `${assistantResponse}\n\n✅ **Ticket automatically saved to Ticket Manager!**` 
+                  },
+                ]);
+              }
+            }
+          }
+        } catch (error) {
+          console.error("Failed to parse ticket from chat:", error);
+        }
+      }
 
       // Try to extract test case from JSON in the response
       const jsonMatch = assistantResponse.match(/\{[\s\S]*"test_case[\s\S]*\}/) || 
@@ -534,9 +625,9 @@ ${"=".repeat(50)}
             >
               {showTestCaseManagement ? "Hide" : "Manage Test Cases"} ({allTestCases.length})
             </Button>
-            <Link href="/prompt-manager">
+            <Link href="/ticket-manager">
               <Button variant="outline" className="border-gray-300 dark:border-gray-800 bg-gray-50 dark:bg-gray-900/50 text-gray-700 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800">
-                Prompt Manager
+                Ticket Manager ({tickets.length})
               </Button>
             </Link>
             <Link href="/dashboard">

@@ -240,7 +240,7 @@ export function CallDetailModal({ call, onClose, onSaveAnnotation }: CallDetailM
                   </div>
                 ) : (
                   <p className="text-gray-500 dark:text-gray-400">
-                    {call.transcript || "No transcript available"}
+                    {displayCall.transcript || "No transcript available"}
                   </p>
                 )}
               </div>

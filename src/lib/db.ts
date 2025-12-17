@@ -476,6 +476,12 @@ export function saveTicket(ticket: Ticket): void {
   }
 }
 
+export function deleteTicket(id: string): void {
+  const database = getDatabase();
+  const stmt = database.prepare(`DELETE FROM tickets WHERE id = ?`);
+  stmt.run(id);
+}
+
 export function getTicketsByFailureMode(failureMode: string): Ticket[] {
   const database = getDatabase();
   const stmt = database.prepare(`
